@@ -63,6 +63,8 @@ const productSchema = new mongoose.Schema(
     brand: {
       type: String,
     },
+    // GST HSN code; the invoice falls back to the category's code when empty.
+    hsn: { type: String, trim: true, maxlength: 8 },
     material: {
       type: String,
     },

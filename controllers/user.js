@@ -60,19 +60,28 @@ exports.saveAddress = async (req, res) => {
 exports.applyCouponDiscount = async (req, res) => {
   const { coupon } = req.body;
 
-  const validCoupon = await Coupon.findOne({ name: String(coupon || "").toUpperCase() }).exec();
+  const validCoupon = await Coupon.findOne({ name: String(coupon || "").toUpperCase() }).lean();
   if (!validCoupon || (validCoupon.expiry && new Date(validCoupon.expiry) < new Date())) {
     return res.json({ error: "Invalid Coupon" });
+  }
+  if (validCoupon.maxUses && validCoupon.usedCount >= validCoupon.maxUses) {
+    return res.json({ error: "This coupon has been fully redeemed." });
   }
 
   const user = await currentUser(req, "_id").lean();
   const cart = user && (await Cart.findOne({ orderedBy: user._id }).exec());
   if (!cart) return res.json({ error: "Your bag is empty" });
+  if (validCoupon.minOrder && cart.cartTotal < validCoupon.minOrder) {
+    return res.json({ error: `This coupon needs a bag of Rs. ${validCoupon.minOrder.toLocaleString("en-IN")} or more.` });
+  }
+  if (validCoupon.firstOrderOnly && (await Order.exists({ orderedBy: user._id }))) {
+    return res.json({ error: "This coupon is for your first order only." });
+  }
 
   const discounted = cart.cartTotal - cart.cartTotal * (validCoupon.discount / 100);
   const totalAfterDiscount = Math.round(discounted * 100) / 100;
 
-  await Cart.updateOne({ _id: cart._id }, { totalAfterDiscount }).exec();
+  await Cart.updateOne({ _id: cart._id }, { totalAfterDiscount, coupon: validCoupon.name }).exec();
 
   res.json({ discount: totalAfterDiscount });
 };
@@ -118,4 +127,19 @@ exports.wishlist = async (req, res) => res.json(await currentUser(req, "wishlist
 exports.removeFromWishlist = async (req, res) => {
   await User.updateOne({ email: req.user.email }, { $pull: { wishlist: req.params.productId } });
   res.json({ ok: true });
+};
+
+// ---- Profile: name, phone, GSTIN and saved delivery addresses ----
+const PROFILE = "name email phone gstin addresses";
+exports.profile = async (req, res) => res.json(await currentUser(req, PROFILE).lean());
+
+exports.saveProfile = async (req, res) => {
+  const { name, phone, gstin, addresses } = req.body;
+  const updated = await User.findOneAndUpdate(
+    { email: req.user.email },
+    { ...(name !== undefined && { name }), ...(phone !== undefined && { phone }), ...(gstin !== undefined && { gstin }),
+      ...(addresses && { addresses }) },
+    { new: true, runValidators: true }
+  ).select(PROFILE).lean();
+  res.status(updated ? 200 : 404).json(updated || { err: "User not found." });
 };

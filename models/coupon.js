@@ -20,6 +20,11 @@ const couponSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    // Optional rules: smallest bag value, total uses, first order only.
+    minOrder: { type: Number, default: 0 },
+    maxUses: { type: Number, default: 0 }, // 0 = unlimited
+    usedCount: { type: Number, default: 0 },
+    firstOrderOnly: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

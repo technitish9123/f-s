@@ -35,6 +35,10 @@ const orderSchema = new mongoose.Schema(
     },
     // GST invoice number, consecutive per financial year (lib/invoiceNo.js).
     invoiceNo: { type: String },
+    coupon: { type: String },
+    statusHistory: [{ status: String, at: { type: Date, default: Date.now }, _id: false }],
+    tracking: { courier: String, number: String, url: String },
+    refund: { id: String, amount: Number, at: Date },
   },
   { timestamps: true }
 );

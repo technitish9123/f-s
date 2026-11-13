@@ -1,6 +1,8 @@
 const mongoose = require("mongoose");
 const Product = require("../models/product");
 const User = require("../models/user");
+const Lead = require("../models/lead");
+const { sendRestockEmail } = require("../lib/mailer");
 const slugify = require("slugify");
 const { toLegacyUpdateResult } = require("../lib/legacyUpdateResult");
 
@@ -32,11 +34,22 @@ exports.deleteProduct = async (req, res) => {
 exports.read = async (req, res) => res.json(await withRefs(Product.findOne({ slug: req.params.slug })));
 
 exports.update = async (req, res) => {
+  let before, updated;
   try {
-    res.json(await Product.findOneAndUpdate({ slug: req.params.slug }, req.body, { new: true }).lean());
+    before = await Product.findOne({ slug: req.params.slug }).select("quantity").lean();
+    updated = await Product.findOneAndUpdate({ slug: req.params.slug }, req.body, { new: true }).lean();
   } catch (err) {
-    res.status(400).send("product update failed");
+    return res.status(400).send("product update failed");
   }
+  res.json(updated);
+  if (updated && before && before.quantity === 0 && updated.quantity > 0) notifyRestock(updated);
+};
+
+// Back in stock: email everyone who asked, then close their requests.
+const notifyRestock = async (product) => {
+  const leads = await Lead.find({ type: "restock", status: "new", "products.product": product._id }).lean();
+  await Promise.all(leads.map((l) => sendRestockEmail(l, product)));
+  if (leads.length) await Lead.updateMany({ _id: { $in: leads.map((l) => l._id) } }, { status: "closed", notes: "Back-in-stock email sent" });
 };
 
 // Paginated list (3 per page), sorted by any field.

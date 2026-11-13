@@ -3,11 +3,8 @@ const User = require("../models/user");
 exports.createOrUpdateUser = async (req, res) => {
   const { name, picture, email } = req.user;
 
-  const user = await User.findOneAndUpdate(
-    { email },
-    { name: email.split("@")[0], picture },
-    { new: true }
-  );
+  // The name is only set on first sign-in, so a name saved in the profile stays.
+  const user = await User.findOneAndUpdate({ email }, { picture }, { new: true });
   if (user) {
     res.json(user);
   } else {

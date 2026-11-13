@@ -1,45 +1,107 @@
 const User = require("../models/user");
+const Order = require("../models/order");
 const { getStripe, toPaise } = require("../lib/stripe");
 const { loadCart, stockProblems, paymentMatches, placeOrder } = require("../lib/orders");
 const { id } = require("../lib/validate");
 const { log } = require("../lib/log");
 
-exports.createPaymentsInteg = async (req, res) => {
+// Where Stripe sends the customer back to: the site they came from, if it is ours.
+const SITES = [/^https:\/\/(www\.)?firstimp\.in$/, /^https:\/\/f-c(-[a-z0-9-]+)?\.onrender\.com$/, /^http:\/\/localhost:\d+$/];
+const siteOf = (req) => {
+  const origin = (req.headers && req.headers.origin) || "";
+  return SITES.some((re) => re.test(origin)) ? origin : "https://firstimp.in";
+};
+
+/*
+ * Stripe-hosted checkout: the customer pays on checkout.stripe.com and comes
+ * back to /payment/complete. Needs only the secret key.
+ */
+exports.createCheckoutSession = async (req, res) => {
   const { couponApplied, shippingAdd } = req.body;
 
-  const user = await User.findOne({ email: req.user.email }).select("_id").lean();
+  const user = await User.findOne({ email: req.user.email }).select("_id email").lean();
   const cart = user && (await loadCart({ orderedBy: user._id }));
   if (!cart || !cart.products.length) return res.status(400).json({ err: "Your bag is empty." });
 
   const problems = stockProblems(cart);
   if (problems.length) return res.status(409).json({ err: problems.join(" ") });
 
-  const { cartTotal, totalAfterDiscount } = cart;
-  // Stripe needs whole paise; discounted totals can have fractions.
-  const payable = toPaise(couponApplied && totalAfterDiscount ? totalAfterDiscount : cartTotal);
-
-  let payment;
-  try {
-    payment = await getStripe().paymentIntents.create({
-      amount: payable,
-      currency: "inr",
-      // The checkout uses Stripe's card field, so ask for cards explicitly (newer
-      // Stripe versions otherwise expect payment methods enabled in the dashboard).
-      payment_method_types: ["card"],
-      // Ties the payment to this customer and cart; the webhook also needs the
-      // shipping address in case the browser never reports back.
-      metadata: {
-        userId: String(user._id),
-        cartId: String(cart._id),
-        ...(shippingAdd && { shipping: JSON.stringify(shippingAdd).slice(0, 500) }),
+  const discounted = couponApplied && cart.totalAfterDiscount && cart.totalAfterDiscount < cart.cartTotal;
+  const payable = toPaise(discounted ? cart.totalAfterDiscount : cart.cartTotal);
+  const items = cart.products.filter((p) => p.product);
+  let lineItems = items.map((p) => ({
+    price_data: { currency: "inr", product_data: { name: p.product.title }, unit_amount: toPaise(p.product.price) },
+    quantity: p.count,
+  }));
+  // With a coupon (or any rounding difference) charge one line for the exact total.
+  if (discounted || lineItems.reduce((t, l) => t + l.price_data.unit_amount * l.quantity, 0) !== payable) {
+    lineItems = [{
+      price_data: {
+        currency: "inr",
+        product_data: {
+          name: "First Impression order",
+          description: `${items.map((p) => `${p.product.title} x ${p.count}`).join(", ").slice(0, 400)}${cart.coupon ? ` (coupon ${cart.coupon})` : ""}`,
+        },
+        unit_amount: payable,
       },
-    });
-  } catch (err) {
-    log("error", { id: req.id, event: "stripe_create_failed", err: err.message });
-    return res.status(502).json({ err: "Payments are unavailable right now. Please try again in a few minutes." });
+      quantity: 1,
+    }];
   }
 
-  res.send({ clientSecret: payment.client_secret, cartTotal, totalAfterDiscount, payable });
+  const metadata = {
+    userId: String(user._id),
+    cartId: String(cart._id),
+    ...(shippingAdd && { shipping: JSON.stringify(shippingAdd).slice(0, 500) }),
+  };
+  const site = siteOf(req);
+  try {
+    const session = await getStripe().checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: lineItems,
+      customer_email: (shippingAdd && shippingAdd.email) || user.email,
+      client_reference_id: String(cart._id),
+      metadata,
+      payment_intent_data: { metadata, description: "First Impression order" },
+      success_url: `${site}/payment/complete?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${site}/checkout?cancelled=1`,
+    });
+    res.json({ url: session.url, payable });
+  } catch (err) {
+    log("error", { id: req.id, event: "stripe_session_failed", err: err.message });
+    res.status(502).json({ err: "Payments are unavailable right now. Please try again in a few minutes." });
+  }
+};
+
+// The customer is back from Stripe: record the order (if the webhook hasn't yet).
+exports.confirmCheckoutSession = async (req, res) => {
+  let session;
+  try {
+    session = await getStripe().checkout.sessions.retrieve(req.params.id, { expand: ["payment_intent"] });
+  } catch (err) {
+    return res.status(404).json({ err: "Payment not found." });
+  }
+  const user = await User.findOne({ email: req.user.email }).select("_id email").lean();
+  const payment = session.payment_intent;
+  if (!user || !payment || (session.metadata || {}).userId !== String(user._id)) {
+    return res.status(404).json({ err: "Payment not found." });
+  }
+  if (session.payment_status !== "paid" || payment.status !== "succeeded") return res.json({ paid: false });
+
+  const summary = (order) => ({ paid: true, orderId: order._id, invoiceNo: order.invoiceNo, email: order.userEmail });
+  const existing = await Order.findOne({ "paymentIntent.paymentInfo.id": payment.id }).select("invoiceNo userEmail").lean();
+  if (existing) return res.json(summary(existing));
+
+  const cart = await loadCart({ _id: payment.metadata.cartId, orderedBy: user._id });
+  if (!cart || !paymentMatches(payment, user, cart)) {
+    // Paid but the cart changed or vanished: the webhook/admin will reconcile.
+    log("error", { id: req.id, event: "paid_session_unmatched", payment: payment.id });
+    return res.json({ paid: true, pending: true });
+  }
+  let shippingAdd;
+  try { shippingAdd = payment.metadata.shipping ? JSON.parse(payment.metadata.shipping) : undefined; } catch { /* truncated */ }
+  await placeOrder({ user, cart, payment, shippingAdd });
+  res.json(summary(await Order.findOne({ "paymentIntent.paymentInfo.id": payment.id }).select("invoiceNo userEmail").lean()));
 };
 
 // Stripe -> us. Records the order even if the customer closed the tab right

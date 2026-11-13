@@ -65,7 +65,9 @@ app.use(
 // Rate limits: generous overall, tighter on payment and order creation.
 app.use("/api", rateLimit({ windowMs: 60 * 1000, limit: 300, standardHeaders: "draft-7", legacyHeaders: false }));
 const paymentLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 30, standardHeaders: "draft-7", legacyHeaders: false });
-app.use(["/api/create-payment-integration", "/api/create-payment-integrations", "/api/user/order"], paymentLimiter);
+app.use(["/api/create-payment-integration", "/api/checkout-session", "/api/user/order"], paymentLimiter);
+// Lead forms are public: 10 per 10 minutes per visitor is plenty.
+app.use("/api/leads", rateLimit({ windowMs: 10 * 60 * 1000, limit: 10, standardHeaders: "draft-7", legacyHeaders: false }));
 
 // Health check for Render / uptime monitors.
 app.get("/api/health", (req, res) =>

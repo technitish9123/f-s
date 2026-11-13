@@ -17,7 +17,9 @@ const {
   orders,
   wishlist,
   addToWishlist,
-  removeFromWishlist
+  removeFromWishlist,
+  profile,
+  saveProfile,
 } = require("../controllers/user");
 
 //route
@@ -31,5 +33,19 @@ router.post("/user/order", authCheck, v.body({ paymentIntent: v.obj({ paymentInf
 router.delete("/user/cart", authCheck, emptyCart);
 router.put("/user/address", authCheck, v.body({ address: (x) => v.str(2000)(x) || v.obj()(x) }), saveAddress);
 router.put("/user/wishlist/:productId", authCheck, v.params({ productId: v.id }), removeFromWishlist);
+
+const GSTIN = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]$/;
+router.get("/user/profile", authCheck, profile);
+router.put(
+  "/user/profile",
+  authCheck,
+  v.body({
+    name: v.opt(v.str(80)),
+    phone: v.opt((x) => typeof x === "string" && /^[+\d][\d\s-]{6,18}$/.test(x)),
+    gstin: v.opt((x) => typeof x === "string" && GSTIN.test(x.toUpperCase())),
+    addresses: v.opt(v.arr(v.obj({ label: v.opt(v.str(30)), name: v.str(80), mobileNum: v.str(20), add: v.str(400) }), 5)),
+  }),
+  saveProfile
+);
 
 module.exports = router;
