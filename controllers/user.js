@@ -4,7 +4,7 @@ const Cart = require("../models/cart");
 const Coupon = require("../models/coupon");
 const Order = require("../models/order");
 const { getStripe } = require("../lib/stripe");
-const { loadCart, paymentMatches, placeOrder, ORDER_PRODUCTS } = require("../lib/orders");
+const { loadCart, paymentMatches, placeOrder, ORDER_PRODUCTS, couponProblem } = require("../lib/orders");
 
 // The signed-in customer's database record (null if they have none yet).
 const currentUser = (req, select) => {
@@ -61,22 +61,13 @@ exports.applyCouponDiscount = async (req, res) => {
   const { coupon } = req.body;
 
   const validCoupon = await Coupon.findOne({ name: String(coupon || "").toUpperCase() }).lean();
-  if (!validCoupon || (validCoupon.expiry && new Date(validCoupon.expiry) < new Date())) {
-    return res.json({ error: "Invalid Coupon" });
-  }
-  if (validCoupon.maxUses && validCoupon.usedCount >= validCoupon.maxUses) {
-    return res.json({ error: "This coupon has been fully redeemed." });
-  }
+  if (!validCoupon) return res.json({ error: "Invalid Coupon" });
 
   const user = await currentUser(req, "_id").lean();
   const cart = user && (await Cart.findOne({ orderedBy: user._id }).exec());
   if (!cart) return res.json({ error: "Your bag is empty" });
-  if (validCoupon.minOrder && cart.cartTotal < validCoupon.minOrder) {
-    return res.json({ error: `This coupon needs a bag of Rs. ${validCoupon.minOrder.toLocaleString("en-IN")} or more.` });
-  }
-  if (validCoupon.firstOrderOnly && (await Order.exists({ orderedBy: user._id }))) {
-    return res.json({ error: "This coupon is for your first order only." });
-  }
+  const problem = await couponProblem(validCoupon, user._id, cart.cartTotal);
+  if (problem) return res.json({ error: problem });
 
   const discounted = cart.cartTotal - cart.cartTotal * (validCoupon.discount / 100);
   const totalAfterDiscount = Math.round(discounted * 100) / 100;

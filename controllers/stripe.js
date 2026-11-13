@@ -1,7 +1,9 @@
 const User = require("../models/user");
 const Order = require("../models/order");
 const { getStripe, toPaise } = require("../lib/stripe");
-const { loadCart, stockProblems, paymentMatches, placeOrder } = require("../lib/orders");
+const { loadCart, stockProblems, paymentMatches, placeOrder, couponProblem } = require("../lib/orders");
+const Coupon = require("../models/coupon");
+const Cart = require("../models/cart");
 const { id } = require("../lib/validate");
 const { log } = require("../lib/log");
 
@@ -26,7 +28,15 @@ exports.createCheckoutSession = async (req, res) => {
   const problems = stockProblems(cart);
   if (problems.length) return res.status(409).json({ err: problems.join(" ") });
 
-  const discounted = couponApplied && cart.totalAfterDiscount && cart.totalAfterDiscount < cart.cartTotal;
+  let discounted = couponApplied && cart.totalAfterDiscount && cart.totalAfterDiscount < cart.cartTotal;
+  if (discounted) {
+    // Rules are checked again right before charging (the coupon may have run out meanwhile).
+    const problem = await couponProblem(await Coupon.findOne({ name: cart.coupon }).lean(), user._id, cart.cartTotal);
+    if (problem) {
+      await Cart.updateOne({ _id: cart._id }, { $unset: { totalAfterDiscount: 1, coupon: 1 } });
+      return res.status(409).json({ err: `${problem} Your bag is back to the full price.`, couponRemoved: true });
+    }
+  }
   const payable = toPaise(discounted ? cart.totalAfterDiscount : cart.cartTotal);
   const items = cart.products.filter((p) => p.product);
   let lineItems = items.map((p) => ({

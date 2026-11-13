@@ -16,11 +16,13 @@ exports.create = async (req, res) => {
     if (open) return res.json({ ok: true });
   }
 
+  // At most one acknowledgement per address per day (the form is public).
+  const recent = await Lead.countDocuments({ email: email.toLowerCase(), createdAt: { $gt: new Date(Date.now() - 864e5) } });
   const lead = await new Lead({
     type, name, email, phone, address, message, visit,
     products: found.map((p) => ({ product: p._id, title: p.title, slug: p.slug })),
   }).save();
-  sendLeadEmails(lead);
+  sendLeadEmails(lead, { acknowledge: recent === 0 });
   res.json({ ok: true });
 };
 
