@@ -48,6 +48,7 @@ app.use(compression());
 app.use(requestLog);
 // Stripe signs the raw body, so the webhook must be parsed before express.json.
 app.post("/api/stripe/webhook", express.raw({ type: "application/json", limit: "1mb" }), webhook);
+app.post("/api/razorpay/webhook", express.raw({ type: "application/json", limit: "1mb" }), require("./controllers/razorpay").webhook);
 app.use(express.json({ limit: "2mb" }));
 
 // Only the storefront (and local development) may call the API from a browser.
@@ -65,7 +66,7 @@ app.use(
 // Rate limits: generous overall, tighter on payment and order creation.
 app.use("/api", rateLimit({ windowMs: 60 * 1000, limit: 300, standardHeaders: "draft-7", legacyHeaders: false }));
 const paymentLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 30, standardHeaders: "draft-7", legacyHeaders: false });
-app.use(["/api/create-payment-integration", "/api/checkout-session", "/api/user/order"], paymentLimiter);
+app.use(["/api/razorpay/order", "/api/razorpay/verify", "/api/user/order"], paymentLimiter);
 // Lead forms are public: 10 per 10 minutes per visitor is plenty.
 app.use("/api/leads", rateLimit({ windowMs: 10 * 60 * 1000, limit: 10, standardHeaders: "draft-7", legacyHeaders: false }));
 

@@ -8,6 +8,7 @@ const User = require("../models/user");
 const Lead = require("../models/lead");
 const slugify = require("slugify");
 const { getStripe } = require("../lib/stripe");
+const razorpay = require("../lib/razorpay");
 const { log } = require("../lib/log");
 
 const STATUSES = ["Not Processed", "Processing", "Dispatched", "Delivered", "Cancelled"];
@@ -50,10 +51,12 @@ exports.refund = async (req, res) => {
 
   let refund;
   try {
-    refund = await getStripe().refunds.create({ payment_intent: paymentId, reason: "requested_by_customer" });
+    refund = paymentId.startsWith("pay_")
+      ? await razorpay.refund(paymentId) // amount in paise, like Stripe
+      : await getStripe().refunds.create({ payment_intent: paymentId, reason: "requested_by_customer" });
   } catch (err) {
     log("error", { id: req.id, event: "refund_failed", order: String(order._id), err: err.message });
-    return res.status(502).json({ err: `Stripe refused the refund: ${err.message}` });
+    return res.status(502).json({ err: `The refund was refused: ${err.message}` });
   }
 
   order.refund = { id: refund.id, amount: refund.amount / 100, at: new Date() };
