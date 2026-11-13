@@ -7,5 +7,4 @@ const {createPaymentsInteg} = require("../controllers/stripe")
 
 router.post("/create-payment-integration", authCheck, createPaymentsInteg)
 
-
 module.exports = router

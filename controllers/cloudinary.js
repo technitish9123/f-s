@@ -6,45 +6,20 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-exports.upload = async (req, res) => {
-  let result = await cloudinary.uploader.upload(req.body.image, {
+// Product and slider images are handled identically.
+const upload = async (req, res) => {
+  const result = await cloudinary.uploader.upload(req.body.image, {
     public_id: `${Date.now()}`,
-    response_type: "auto", //setting to jpeg, png
+    resource_type: "auto",
   });
-
-  res.json({
-    public_id: result.public_id,
-    url: result.secure_url,
-  });
+  res.json({ public_id: result.public_id, url: result.secure_url });
 };
 
-exports.remove = (req, res) => {
-  let image_id = req.body.public_id;
-
-  cloudinary.uploader.destroy(image_id, (err, result) => {
+const remove = (req, res) => {
+  cloudinary.uploader.destroy(req.body.public_id, (err) => {
     if (err) return res.json({ status: false, err });
     res.send("ok");
   });
 };
-//slider image upload.
 
-exports.sliderUpload = async (req, res) => {
-  let result = await cloudinary.uploader.upload(req.body.image, {
-    public_id: `${Date.now()}`,
-    response_type: "auto", //setting to jpeg, png
-  });
-
-  res.json({
-    public_id: result.public_id,
-    url: result.secure_url,
-  });
-};
-
-exports.sliderRemove = (req, res) => {
-  let image_id = req.body.public_id;
-
-  cloudinary.uploader.destroy(image_id, (err, result) => {
-    if (err) return res.json({ status: false, err });
-    res.send("ok");
-  });
-};
+module.exports = { upload, remove, sliderUpload: upload, sliderRemove: remove };

@@ -30,5 +30,4 @@ router.put("/product/star/:product_id", authCheck, productStar);
 
 //SEARCH
 
-
 module.exports = router;

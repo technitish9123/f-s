@@ -10,7 +10,6 @@ const morgan = require("morgan");
 const cors = require("cors");
 const { readdirSync } = require("fs");
 require("dotenv").config({ quiet: true });
-const path = require("path");
 
 // app
 const app = express();
@@ -90,12 +89,5 @@ app.use((err, req, res, next) => {
 // port
 const port = process.env.PORT || 8000;
 
-if (process.env.NODE_ENV === "production") {
-
-  app.use(express.static(path.join(__dirname, "../client/build")));
-  app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "../client/build/index.html"));
-  });
-}
 
 app.listen(port, () => console.log(`Server is running on port ${port}`));

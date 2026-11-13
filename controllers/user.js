@@ -6,11 +6,17 @@ const Order = require("../models/order");
 const { getStripe, toPaise } = require("../lib/stripe");
 const { sendOrderConfirmation } = require("../lib/mailer");
 
+// The signed-in customer's database record (null if they have none yet).
+const currentUser = (req, select) => {
+  const q = User.findOne({ email: req.user.email });
+  return select ? q.select(select) : q;
+};
+
 exports.userCart = async (req, res) => {
   const { cart } = req.body;
   if (!Array.isArray(cart)) return res.status(400).json({ err: "Invalid cart." });
 
-  const user = await User.findOne({ email: req.user.email }).exec();
+  const user = await currentUser(req);
   if (!user) return res.status(404).json({ err: "User not found." });
 
   // Prices always come from the database, never from the browser.
@@ -35,39 +41,20 @@ exports.userCart = async (req, res) => {
 };
 
 exports.getUserCart = async (req, res) => {
-  let user = await User.findOne({ email: req.user.email });
-
-  let cart = await Cart.findOne({ orderedBy: user._id })
-    .populate("products.product", "_id title price gst totalAfterDiscount")
-    .exec();
-
-  const { totalAfterDiscount, products, cartTotal } = cart;
-
-  res.json({
-    totalAfterDiscount,
-    products,
-    cartTotal,
-  });
+  const user = await currentUser(req, "_id").lean();
+  const cart = user && (await Cart.findOne({ orderedBy: user._id }).populate("products.product", "_id title price gst").lean());
+  const { totalAfterDiscount, products = [], cartTotal = 0 } = cart || {};
+  res.json({ totalAfterDiscount, products, cartTotal });
 };
 
 exports.emptyCart = async (req, res) => {
-  let user = await User.findOne({ email: req.user.email });
-
-  // findOneAndRemove was removed in Mongoose 8.
-  let cart = await Cart.findOneAndDelete({ orderedBy: user._id });
-
-  res.json(cart);
+  const user = await currentUser(req, "_id").lean();
+  res.json(user ? await Cart.findOneAndDelete({ orderedBy: user._id }).lean() : null);
 };
 
 exports.saveAddress = async (req, res) => {
-  let address = await User.findOneAndUpdate(
-    { email: req.user.email },
-    { address: req.body.address }
-  ).exec();
-
-  if (address) {
-    res.json({ ok: true });
-  }
+  const updated = await User.findOneAndUpdate({ email: req.user.email }, { address: req.body.address }).select("_id").lean();
+  res.status(updated ? 200 : 404).json(updated ? { ok: true } : { err: "User not found." });
 };
 
 exports.applyCouponDiscount = async (req, res) => {
@@ -78,7 +65,7 @@ exports.applyCouponDiscount = async (req, res) => {
     return res.json({ error: "Invalid Coupon" });
   }
 
-  const user = await User.findOne({ email: req.user.email }).exec();
+  const user = await currentUser(req, "_id").lean();
   const cart = user && (await Cart.findOne({ orderedBy: user._id }).exec());
   if (!cart) return res.json({ error: "Your bag is empty" });
 
@@ -93,7 +80,7 @@ exports.applyCouponDiscount = async (req, res) => {
 exports.createOrder = async (req, res) => {
   const { paymentIntent } = req.body; // { shippingAdd, paymentInfo: { id, ... } }
 
-  const user = await User.findOne({ email: req.user.email }).exec();
+  const user = await currentUser(req);
   if (!user) return res.status(404).json({ err: "User not found." });
 
   const cart = await Cart.findOne({ orderedBy: user._id })
@@ -173,43 +160,18 @@ exports.createOrder = async (req, res) => {
 };
 
 exports.orders = async (req, res) => {
-  let user = await User.findOne({ email: req.user.email }).exec();
-
-  let orders = await Order.find({ orderedBy: user._id })
-    .populate("products.product")
-    .exec();
-
-  res.json(orders);
+  const user = await currentUser(req, "_id").lean();
+  res.json(user ? await Order.find({ orderedBy: user._id }).populate("products.product").lean() : []);
 };
 
 exports.addToWishlist = async (req, res) => {
-  const { productId } = req.body;
-
-  let updated = await User.findOneAndUpdate(
-    { email: req.user.email },
-    { $addToSet: { wishlist: productId } },
-    { new: true }
-  ).exec();
-
+  await User.updateOne({ email: req.user.email }, { $addToSet: { wishlist: req.body.productId } });
   res.json({ ok: true });
 };
 
-exports.wishlist = async (req, res) => {
-  let listWishlist = await User.findOne({ email: req.user.email })
-    .select("wishlist")
-    .populate("wishlist")
-    .exec();
-
-  res.json(listWishlist);
-};
+exports.wishlist = async (req, res) => res.json(await currentUser(req, "wishlist").populate("wishlist").lean());
 
 exports.removeFromWishlist = async (req, res) => {
-  const { productId } = req.params;
-
-  const user = await User.findOneAndUpdate(
-    { email: req.user.email },
-    { $pull: { wishlist: productId } }
-  ).exec();
-
+  await User.updateOne({ email: req.user.email }, { $pull: { wishlist: req.params.productId } });
   res.json({ ok: true });
 };

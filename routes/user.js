@@ -31,15 +31,4 @@ router.delete("/user/cart", authCheck, emptyCart);
 router.put("/user/address", authCheck, saveAddress);
 router.put("/user/wishlist/:productId", authCheck, removeFromWishlist);
 
-
-
-
-
-
-// router.get("/user", (req, res) => {
-//   res.json({
-//     data: "hey you hit user API endpoint",
-//   });
-// });
-
 module.exports = router;
