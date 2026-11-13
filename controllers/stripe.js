@@ -18,17 +18,26 @@ exports.createPaymentsInteg = async (req, res) => {
   // Stripe needs whole paise; discounted totals can have fractions.
   const payable = toPaise(couponApplied && totalAfterDiscount ? totalAfterDiscount : cartTotal);
 
-  const payment = await getStripe().paymentIntents.create({
-    amount: payable,
-    currency: "inr",
-    // Ties the payment to this customer and cart; the webhook also needs the
-    // shipping address in case the browser never reports back.
-    metadata: {
-      userId: String(user._id),
-      cartId: String(cart._id),
-      ...(shippingAdd && { shipping: JSON.stringify(shippingAdd).slice(0, 500) }),
-    },
-  });
+  let payment;
+  try {
+    payment = await getStripe().paymentIntents.create({
+      amount: payable,
+      currency: "inr",
+      // The checkout uses Stripe's card field, so ask for cards explicitly (newer
+      // Stripe versions otherwise expect payment methods enabled in the dashboard).
+      payment_method_types: ["card"],
+      // Ties the payment to this customer and cart; the webhook also needs the
+      // shipping address in case the browser never reports back.
+      metadata: {
+        userId: String(user._id),
+        cartId: String(cart._id),
+        ...(shippingAdd && { shipping: JSON.stringify(shippingAdd).slice(0, 500) }),
+      },
+    });
+  } catch (err) {
+    log("error", { id: req.id, event: "stripe_create_failed", err: err.message });
+    return res.status(502).json({ err: "Payments are unavailable right now. Please try again in a few minutes." });
+  }
 
   res.send({ clientSecret: payment.client_secret, cartTotal, totalAfterDiscount, payable });
 };
