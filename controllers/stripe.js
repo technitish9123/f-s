@@ -2,7 +2,16 @@ const Product = require("../models/product");
 const User = require("../models/user");
 const Cart = require("../models/cart");
 const Coupon = require("../models/coupon");
-const stripe = require("stripe")(process.env.STRIPE_SECRET);
+const Stripe = require("stripe");
+
+// Current stripe-node throws at construction time when the API key is missing
+// (v8 did not), which would crash the server at boot because routes are loaded
+// eagerly. Create the client on first use instead.
+let stripeClient;
+const getStripe = () => {
+  if (!stripeClient) stripeClient = Stripe(process.env.STRIPE_SECRET);
+  return stripeClient;
+};
 
 exports.createPaymentsInteg = async (req, res) => {
   const { couponApplied } = req.body;
@@ -26,7 +35,7 @@ exports.createPaymentsInteg = async (req, res) => {
   //discount total whether coupon applied
 
   //payments intent by applying order amount and currency
-  let createPaymentIntent = await stripe.paymentIntents.create({
+  let createPaymentIntent = await getStripe().paymentIntents.create({
     amount: finalAmount,
     currency: "inr",
   });

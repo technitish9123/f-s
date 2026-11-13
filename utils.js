@@ -1,10 +1,15 @@
-const mg =require('mailgun-js') ;
+// Not currently imported anywhere. Previously built on the deprecated
+// `mailgun-js` package; now uses `mailgun.js` (the package controllers/user.js
+// already uses). Send with:
+//   mailgun().messages.create(process.env.MAILGUN_DOMIAN, messageData)
+const formData = require("form-data");
+const Mailgun = require("mailgun.js");
 
 exports.mailgun = () =>
-mg({
-  apiKey: process.env.MAILGUN_API_KEY,
-  domain: process.env.MAILGUN_DOMIAN,
-});
+  new Mailgun(formData).client({
+    username: "api",
+    key: process.env.MAILGUN_API_KEY,
+  });
 
 exports.payOrderEmailTemplate = (order) => {
 return `<h1>Thanks for shopping with us</h1>

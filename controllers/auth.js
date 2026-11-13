@@ -23,8 +23,9 @@ exports.createOrUpdateUser = async (req, res) => {
 };
 
 exports.currentUser = async (req, res) => {
-  User.findOne({ email: req.user.email }).exec((err, user) => {
-    if (err) throw new Error(err);
-    res.json(user);
-  });
+  // Mongoose 7+ no longer accepts callbacks. A query error used to be thrown
+  // from the callback; it now rejects this handler and is logged by the
+  // process-level unhandledRejection handler in server.js.
+  const user = await User.findOne({ email: req.user.email }).exec();
+  res.json(user);
 };

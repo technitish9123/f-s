@@ -18,7 +18,8 @@ exports.userCart = async (req, res) => {
   let cartExistingWithUser = await Cart.findOne({ orderedBy: user._id }).exec();
 
   if (cartExistingWithUser) {
-    cartExistingWithUser.remove();
+    // Document#remove() was removed in Mongoose 7.
+    await cartExistingWithUser.deleteOne();
     console.log("cart removed");
   }
 
@@ -72,7 +73,8 @@ exports.getUserCart = async (req, res) => {
 exports.emptyCart = async (req, res) => {
   let user = await User.findOne({ email: req.user.email });
 
-  let cart = await Cart.findOneAndRemove({ orderedBy: user._id });
+  // findOneAndRemove was removed in Mongoose 8.
+  let cart = await Cart.findOneAndDelete({ orderedBy: user._id });
 
   res.json(cart);
 };
