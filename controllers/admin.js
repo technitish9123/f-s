@@ -7,6 +7,7 @@ const Product = require("../models/product");
 const User = require("../models/user");
 const Lead = require("../models/lead");
 const slugify = require("slugify");
+const { reindex } = require("../lib/facets");
 const { getStripe } = require("../lib/stripe");
 const razorpay = require("../lib/razorpay");
 const { log } = require("../lib/log");
@@ -129,24 +130,45 @@ exports.customers = async (req, res) => {
   }));
 };
 
-// Bulk product import (rows already validated by the route).
+/*
+ * Bulk product import (rows already validated by the route). Rows with a
+ * supplier code (sku) are matched on it: existing products are updated
+ * (e.g. a new price list), new ones created. Rows without a price become
+ * "price on request".
+ */
 exports.importProducts = async (req, res) => {
   const { products } = req.body;
   const results = [];
+  const touched = [];
   for (const [i, row] of products.entries()) {
-    const slug = slugify(row.title, { lower: true, strict: true });
-    if (await Product.exists({ slug })) {
-      results.push({ row: i + 1, ok: false, err: "A product with this title already exists." });
-      continue;
-    }
+    const data = { ...row, priceOnRequest: row.price === undefined || row.price === null };
     try {
-      const doc = await new Product({ ...row, slug }).save();
+      const existing = row.sku ? await Product.findOne({ sku: row.sku }).select("_id slug").lean() : null;
+      if (existing) {
+        if (data.priceOnRequest) delete data.priceOnRequest; // a catalogue refresh never wipes a known price
+        await Product.updateOne({ _id: existing._id }, { $set: data });
+        touched.push(existing._id);
+        results.push({ row: i + 1, ok: true, slug: existing.slug, updated: true });
+        continue;
+      }
+      const slug = slugify(row.sku ? `${row.title} ${row.sku.replace(/\//g, "-")}` : row.title, { lower: true, strict: true });
+      if (await Product.exists({ slug })) {
+        results.push({ row: i + 1, ok: false, err: "A product with this title already exists." });
+        continue;
+      }
+      const doc = await new Product({ ...data, slug }).save();
+      touched.push(doc._id);
       results.push({ row: i + 1, ok: true, slug: doc.slug });
     } catch (err) {
-      results.push({ row: i + 1, ok: false, err: err.code === 11000 ? "A product with this title already exists." : err.message });
+      results.push({ row: i + 1, ok: false, err: err.code === 11000 ? "Duplicate product." : err.message });
     }
   }
-  res.json({ created: results.filter((r) => r.ok).length, results });
+  if (touched.length) await reindex({ _id: { $in: touched } });
+  res.json({
+    created: results.filter((r) => r.ok && !r.updated).length,
+    updated: results.filter((r) => r.updated).length,
+    results,
+  });
 };
 
 exports.uploadSliderImage = async (req, res) => {

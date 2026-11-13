@@ -3,6 +3,7 @@ const Product = require("../models/product");
 const User = require("../models/user");
 const Lead = require("../models/lead");
 const { sendRestockEmail } = require("../lib/mailer");
+const { reindex } = require("../lib/facets");
 const slugify = require("slugify");
 const { toLegacyUpdateResult } = require("../lib/legacyUpdateResult");
 
@@ -12,7 +13,9 @@ const withRefs = (query) => query.populate("category").populate("subs").lean();
 exports.create = async (req, res) => {
   try {
     req.body.slug = slugify(req.body.title);
-    res.json(await new Product(req.body).save());
+    const doc = await new Product(req.body).save();
+    await reindex({ _id: doc._id });
+    res.json(doc);
   } catch (err) {
     res.status(400).json({ err: err.message });
   }
@@ -37,7 +40,10 @@ exports.update = async (req, res) => {
   let before, updated;
   try {
     before = await Product.findOne({ slug: req.params.slug }).select("quantity").lean();
+    // Giving a "price on request" product a price makes it purchasable.
+    if (req.body.price > 0 && req.body.priceOnRequest === undefined) req.body.priceOnRequest = false;
     updated = await Product.findOneAndUpdate({ slug: req.params.slug }, req.body, { new: true }).lean();
+    if (updated) await reindex({ _id: updated._id });
   } catch (err) {
     return res.status(400).send("product update failed");
   }

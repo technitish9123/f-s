@@ -21,8 +21,8 @@ exports.userCart = async (req, res) => {
 
   // Prices always come from the database, never from the browser.
   const ids = cart.map((c) => c && c._id).filter(Boolean);
-  const priced = await Product.find({ _id: { $in: ids } }).select("price").lean().exec();
-  const priceById = new Map(priced.map((p) => [String(p._id), p.price]));
+  const priced = await Product.find({ _id: { $in: ids }, priceOnRequest: { $ne: true } }).select("price").lean().exec();
+  const priceById = new Map(priced.filter((p) => p.price > 0).map((p) => [String(p._id), p.price]));
 
   const products = [];
   for (const item of cart) {
@@ -42,7 +42,7 @@ exports.userCart = async (req, res) => {
 
 exports.getUserCart = async (req, res) => {
   const user = await currentUser(req, "_id").lean();
-  const cart = user && (await Cart.findOne({ orderedBy: user._id }).populate("products.product", "_id title price gst").lean());
+  const cart = user && (await Cart.findOne({ orderedBy: user._id }).populate("products.product", "_id title price gst images slug").lean());
   const { totalAfterDiscount, products = [], cartTotal = 0 } = cart || {};
   res.json({ totalAfterDiscount, products, cartTotal });
 };
