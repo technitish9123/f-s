@@ -2,11 +2,12 @@ const Order = require("../models/order");
 const SliderImage = require("../models/sliderImage");
 const { toLegacyUpdateResult } = require("../lib/legacyUpdateResult");
 const { sendStatusUpdate } = require("../lib/mailer");
+const { ORDER_PRODUCTS } = require("../lib/orders");
 
 const STATUSES = ["Not Processed", "Processing", "Dispatched", "Delivered", "Cancelled"];
 
 exports.orders = async (req, res) =>
-  res.json(await Order.find({}).sort("createdAt").populate("products.product").lean());
+  res.json(await Order.find({}).sort("createdAt").populate(ORDER_PRODUCTS).lean());
 
 exports.orderStatus = async (req, res) => {
   const { orderId, orderStatus } = req.body;

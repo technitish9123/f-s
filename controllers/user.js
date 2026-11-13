@@ -4,7 +4,7 @@ const Cart = require("../models/cart");
 const Coupon = require("../models/coupon");
 const Order = require("../models/order");
 const { getStripe } = require("../lib/stripe");
-const { loadCart, paymentMatches, placeOrder } = require("../lib/orders");
+const { loadCart, paymentMatches, placeOrder, ORDER_PRODUCTS } = require("../lib/orders");
 
 // The signed-in customer's database record (null if they have none yet).
 const currentUser = (req, select) => {
@@ -105,7 +105,7 @@ exports.createOrder = async (req, res) => {
 
 exports.orders = async (req, res) => {
   const user = await currentUser(req, "_id").lean();
-  res.json(user ? await Order.find({ orderedBy: user._id }).populate("products.product").lean() : []);
+  res.json(user ? await Order.find({ orderedBy: user._id }).populate(ORDER_PRODUCTS).lean() : []);
 };
 
 exports.addToWishlist = async (req, res) => {
