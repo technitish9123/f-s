@@ -119,8 +119,10 @@ exports.createOrder = async (req, res) => {
   }
 
   const allowed = [toPaise(cart.cartTotal), toPaise(cart.totalAfterDiscount)].filter((a) => a > 0);
-  const ownerOk = !stripePayment.metadata || !stripePayment.metadata.userId
-    || stripePayment.metadata.userId === String(user._id);
+  // Fail closed: the payment must have been created by createPaymentsInteg
+  // for this user and this exact cart.
+  const meta = stripePayment.metadata || {};
+  const ownerOk = meta.userId === String(user._id) && meta.cartId === String(cart._id);
   if (
     stripePayment.status !== "succeeded" ||
     stripePayment.currency !== "inr" ||
@@ -131,7 +133,10 @@ exports.createOrder = async (req, res) => {
   }
 
   // Store Stripe's own record (same shape the invoice and account pages read).
-  const newOrder = await new Order({
+  // The unique index on the payment id makes a concurrent replay fail here.
+  let newOrder;
+  try {
+    newOrder = await new Order({
     products: cart.products.map((p) => ({ product: p.product && p.product._id, count: p.count, color: p.color })),
     paymentIntent: {
       shippingAdd: paymentIntent.shippingAdd,
@@ -139,7 +144,11 @@ exports.createOrder = async (req, res) => {
     },
     orderedBy: user._id,
     userEmail: user.email,
-  }).save();
+    }).save();
+  } catch (err) {
+    if (err && err.code === 11000) return res.json({ ok: true }); // already recorded
+    throw err;
+  }
 
   // Track sales; adjust stock only for products that track it.
   const ops = cart.products
