@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Product = require("../models/product");
 const User = require("../models/user");
 const slugify = require("slugify");
@@ -85,20 +86,25 @@ exports.listRelated = async (req, res) => {
  * (they used to be eight separate handlers; combining two filters crashed
  * with "headers already sent").
  */
+// Only plain strings / valid ids reach the query, so a body like
+// { color: { $ne: null } } can't smuggle in a MongoDB operator.
+const str = (v) => (typeof v === "string" && v ? v : undefined);
+const id = (v) => (typeof v === "string" && mongoose.isValidObjectId(v) ? v : undefined);
+
 exports.searchFilters = async (req, res) => {
-  const { query, price, category, stars, sub, shipping, color, brand } = req.body;
+  const { query, price, stars } = req.body;
   const filter = {};
+  const set = (key, value) => value !== undefined && (filter[key] = value);
 
-  if (query) filter.$text = { $search: query };
+  if (str(query)) filter.$text = { $search: query };
   if (Array.isArray(price)) filter.price = { $gte: Number(price[0]) || 0, $lte: Number(price[1]) || Number.MAX_SAFE_INTEGER };
-  if (category) filter.category = category;
-  if (sub) filter.subs = sub;
-  if (shipping) filter.shipping = shipping;
-  if (color) filter.color = color;
-  if (brand) filter.brand = brand;
-  if (stars) filter.$expr = { $eq: [{ $floor: { $avg: "$ratings.star" } }, Number(stars)] };
+  set("category", id(req.body.category));
+  set("subs", id(req.body.sub));
+  set("shipping", str(req.body.shipping));
+  set("color", str(req.body.color));
+  set("brand", str(req.body.brand));
+  const star = Number(stars);
+  if (star >= 1 && star <= 5) filter.$expr = { $eq: [{ $floor: { $avg: "$ratings.star" } }, star] };
 
-  let q = Product.find(filter);
-  if (stars) q = q.limit(12); // previous behaviour for the rating filter
-  res.json(await withRefs(q));
+  res.json(await withRefs(Product.find(filter).limit(filter.$expr ? 12 : 1000)));
 };
