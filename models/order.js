@@ -11,6 +11,7 @@ const orderSchema = new mongoose.Schema(
         },
         count: Number,
         color: String,
+        variant: String, // colour code when the product has colour options
       },
     ],
     paymentIntent: {

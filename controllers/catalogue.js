@@ -8,6 +8,7 @@ const { FACET_KEYS, ORDER } = require("../lib/facets");
 const CARD = {
   title: 1, slug: 1, price: 1, priceOnRequest: 1, quantity: 1, color: 1, brand: 1, sku: 1, createdAt: 1, sold: 1,
   images: { $slice: ["$images", 2] }, category: 1, "idx.family": 1,
+  colours: { $size: { $ifNull: ["$variants", []] } },
 };
 const SORTS = {
   featured: { sold: -1, createdAt: -1, _id: 1 },

@@ -21,15 +21,24 @@ exports.userCart = async (req, res) => {
 
   // Prices always come from the database, never from the browser.
   const ids = cart.map((c) => c && c._id).filter(Boolean);
-  const priced = await Product.find({ _id: { $in: ids }, priceOnRequest: { $ne: true } }).select("price").lean().exec();
-  const priceById = new Map(priced.filter((p) => p.price > 0).map((p) => [String(p._id), p.price]));
+  const priced = await Product.find({ _id: { $in: ids }, priceOnRequest: { $ne: true } })
+    .select("price color variants.code variants.colour").lean().exec();
+  const byId = new Map(priced.filter((p) => p.price > 0).map((p) => [String(p._id), p]));
 
   const products = [];
   for (const item of cart) {
-    const price = priceById.get(String(item && item._id));
+    const p = byId.get(String(item && item._id));
     const count = Math.floor(Number(item && item.count));
-    if (price === undefined || !Number.isFinite(count) || count < 1 || count > 1000) continue;
-    products.push({ product: item._id, count, color: item.color, price });
+    if (!p || !Number.isFinite(count) || count < 1 || count > 1000) continue;
+    const line = { product: p._id, count, price: p.price, color: p.color };
+    // A product with colour options needs one of them; the colour comes from the database.
+    if (p.variants && p.variants.length) {
+      const v = p.variants.find((x) => x.code === item.variant);
+      if (!v) continue;
+      line.variant = v.code;
+      line.color = [v.colour, v.code].filter(Boolean).join(" · ");
+    }
+    products.push(line);
   }
 
   const cartTotal = products.reduce((sum, p) => sum + p.price * p.count, 0);

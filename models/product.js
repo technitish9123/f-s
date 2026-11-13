@@ -70,6 +70,20 @@ const productSchema = new mongoose.Schema(
     sku: { type: String, trim: true, maxlength: 40 },
     articleCode: { type: String, trim: true, maxlength: 40 },
     priceOnRequest: { type: Boolean, default: false },
+    // Colours of one article (one product per article, e.g. 243 colours of JAB
+    // CH1249). Each has the supplier code, a name, its picture and optional stock.
+    variants: {
+      type: [
+        {
+          _id: false,
+          code: { type: String, trim: true, maxlength: 40, required: true },
+          colour: { type: String, trim: true, maxlength: 60 },
+          image: { type: String, maxlength: 1000 },
+          quantity: { type: Number },
+        },
+      ],
+      default: undefined,
+    },
     // Search/filter index maintained by lib/facets.js (never set by hand).
     idx: {
       type: { type: [String], default: undefined },
@@ -128,6 +142,7 @@ productSchema.index({ createdAt: -1 });
 productSchema.index({ sold: -1 });
 productSchema.index({ sku: 1 }, { unique: true, sparse: true });
 productSchema.index({ "idx.family": 1 });
+productSchema.index({ articleCode: 1 }, { sparse: true });
 productSchema.index({ subs: 1 });
 productSchema.index({ price: 1 });
 

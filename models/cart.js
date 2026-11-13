@@ -12,6 +12,7 @@ const cartSchema = new mongoose.Schema(
         count: Number,
         price: Number,
         color: String,
+        variant: String, // colour code when the product has colour options
         gst:Number,
       },
     ],

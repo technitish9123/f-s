@@ -2,7 +2,7 @@ const Order = require("../models/order");
 const SliderImage = require("../models/sliderImage");
 const { toLegacyUpdateResult } = require("../lib/legacyUpdateResult");
 const { sendStatusUpdate } = require("../lib/mailer");
-const { ORDER_PRODUCTS } = require("../lib/orders");
+const { ORDER_PRODUCTS, variantStock } = require("../lib/orders");
 const Product = require("../models/product");
 const User = require("../models/user");
 const Lead = require("../models/lead");
@@ -70,7 +70,9 @@ exports.refund = async (req, res) => {
     await Product.bulkWrite(
       items.flatMap((p) => [
         { updateOne: { filter: { _id: p.product._id }, update: { $inc: { sold: -p.count } } } },
-        { updateOne: { filter: { _id: p.product._id, quantity: { $type: "number" } }, update: { $inc: { quantity: p.count } } } },
+        p.variant
+          ? { updateOne: { filter: { _id: p.product._id, "variants.code": p.variant }, update: variantStock(p.variant, p.count) } }
+          : { updateOne: { filter: { _id: p.product._id, quantity: { $type: "number" } }, update: { $inc: { quantity: p.count } } } },
       ]),
       { ordered: false }
     );
@@ -136,39 +138,90 @@ exports.customers = async (req, res) => {
  * (e.g. a new price list), new ones created. Rows without a price become
  * "price on request".
  */
+/*
+ * Bulk import. Rows that share an articleCode become ONE product with a
+ * colour option per row (sku = that colour's code, color = its name, first
+ * image = its picture). Re-importing updates by article/code, so the same
+ * file (or a later price list) can be loaded again safely.
+ */
 exports.importProducts = async (req, res) => {
   const { products } = req.body;
   const results = [];
   const touched = [];
-  for (const [i, row] of products.entries()) {
-    const data = { ...row, priceOnRequest: row.price === undefined || row.price === null };
+  const groups = new Map();
+  products.forEach((row, i) => {
+    const key = row.articleCode ? `a:${row.articleCode.toLowerCase()}` : `r:${i}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ i, row });
+  });
+
+  for (const rows of groups.values()) {
+    const report = (r) => rows.forEach(({ i }) => results.push({ row: i + 1, ...r }));
     try {
-      const existing = row.sku ? await Product.findOne({ sku: row.sku }).select("_id slug").lean() : null;
-      if (existing) {
-        if (data.priceOnRequest) delete data.priceOnRequest; // a catalogue refresh never wipes a known price
-        await Product.updateOne({ _id: existing._id }, { $set: data });
-        touched.push(existing._id);
-        results.push({ row: i + 1, ok: true, slug: existing.slug, updated: true });
-        continue;
-      }
-      const slug = slugify(row.sku ? `${row.title} ${row.sku.replace(/\//g, "-")}` : row.title, { lower: true, strict: true });
-      if (await Product.exists({ slug })) {
-        results.push({ row: i + 1, ok: false, err: "A product with this title already exists." });
-        continue;
-      }
-      const doc = await new Product({ ...data, slug }).save();
-      touched.push(doc._id);
-      results.push({ row: i + 1, ok: true, slug: doc.slug });
+      const r = rows[0].row.articleCode ? await importArticle(rows.map((x) => x.row)) : await importSingle(rows[0].row);
+      if (r.id) touched.push(r.id);
+      report(r.ok ? { ok: true, slug: r.slug, ...(r.updated && { updated: true }) } : { ok: false, err: r.err });
     } catch (err) {
-      results.push({ row: i + 1, ok: false, err: err.code === 11000 ? "Duplicate product." : err.message });
+      report({ ok: false, err: err.code === 11000 ? "Duplicate product." : err.message });
     }
   }
+  results.sort((a, b) => a.row - b.row);
   if (touched.length) await reindex({ _id: { $in: touched } });
+  const ok = results.filter((r) => r.ok);
   res.json({
-    created: results.filter((r) => r.ok && !r.updated).length,
-    updated: results.filter((r) => r.updated).length,
+    created: ok.filter((r) => !r.updated).length,
+    updated: ok.filter((r) => r.updated).length,
+    products: new Set(ok.map((r) => r.slug)).size,
     results,
   });
+};
+
+// A product without an article: one row, matched by its code (sku) if it has one.
+const importSingle = async (row) => {
+  const data = { ...row, priceOnRequest: row.price === undefined || row.price === null };
+  const existing = row.sku ? await Product.findOne({ sku: row.sku }).select("_id slug").lean() : null;
+  if (existing) {
+    if (data.priceOnRequest) delete data.priceOnRequest; // a catalogue refresh never wipes a known price
+    await Product.updateOne({ _id: existing._id }, { $set: data });
+    return { ok: true, id: existing._id, slug: existing.slug, updated: true };
+  }
+  const slug = slugify(row.sku ? `${row.title} ${row.sku.replace(/\//g, "-")}` : row.title, { lower: true, strict: true });
+  if (await Product.exists({ slug })) return { ok: false, err: "A product with this title already exists." };
+  const doc = await new Product({ ...data, slug }).save();
+  return { ok: true, id: doc._id, slug: doc.slug };
+};
+
+// One article: product details from its first row, a colour option per row.
+const importArticle = async (rows) => {
+  const head = rows[0];
+  const priced = rows.find((r) => r.price !== undefined && r.price !== null);
+  const incoming = rows.filter((r) => r.sku).map((r) => ({
+    code: r.sku,
+    colour: r.color,
+    image: r.images && r.images[0] && r.images[0].url,
+    quantity: r.quantity,
+  }));
+  // Product-level fields; colour, code and stock belong to the colour options.
+  const { sku, color, quantity, price, ...data } = head; // eslint-disable-line no-unused-vars
+  if (!data.images || !data.images.length) delete data.images;
+  if (priced) Object.assign(data, { price: priced.price, priceOnRequest: false });
+
+  const existing = await Product.findOne({ articleCode: head.articleCode }).select("_id slug variants").lean();
+  if (existing) {
+    // Merge colours by code: known ones are refreshed (stock kept unless given), new ones added.
+    const byCode = new Map((existing.variants || []).map((v) => [v.code, v]));
+    for (const v of incoming) {
+      const old = byCode.get(v.code) || {};
+      byCode.set(v.code, { ...old, ...Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined && x !== null)) });
+    }
+    await Product.updateOne({ _id: existing._id }, { $set: { ...data, variants: [...byCode.values()].slice(0, 400) } });
+    return { ok: true, id: existing._id, slug: existing.slug, updated: true };
+  }
+  const slug = slugify(`${head.title} ${head.articleCode.replace(/\//g, "-")}`, { lower: true, strict: true });
+  if (await Product.exists({ slug })) return { ok: false, err: "A product with this title already exists." };
+  const images = data.images || (incoming[0] && incoming[0].image ? [{ url: incoming[0].image, public_id: "" }] : undefined);
+  const doc = await new Product({ ...data, images, priceOnRequest: !priced, variants: incoming.length ? incoming : undefined, slug }).save();
+  return { ok: true, id: doc._id, slug: doc.slug };
 };
 
 exports.uploadSliderImage = async (req, res) => {
