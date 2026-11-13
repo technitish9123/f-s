@@ -6,7 +6,8 @@ const compression = require("compression");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const mongoose = require("mongoose");
-const morgan = require("morgan");
+const { requestLog, log } = require("./lib/log");
+const { webhook } = require("./controllers/stripe");
 const cors = require("cors");
 const { readdirSync } = require("fs");
 require("dotenv").config({ quiet: true });
@@ -20,7 +21,7 @@ const app = express();
 // this app previously ran on, only logged these, so keep that behaviour rather
 // than letting one bad request take the whole server down.
 process.on("unhandledRejection", (reason) => {
-  console.error("UNHANDLED REJECTION", reason);
+  log("error", { event: "unhandled_rejection", err: String(reason && reason.stack || reason) });
 });
 
 // db
@@ -34,8 +35,8 @@ mongoose.set("strictPopulate", false);
 
 mongoose
   .connect(process.env.DATABASE)
-  .then(() => console.log("DB CONNECTED"))
-  .catch((err) => console.log("DB CONNECTION ERR", err));
+  .then(() => log("info", { event: "db_connected" }))
+  .catch((err) => log("error", { event: "db_connection_failed", err: err.message }));
 
 // middlewares
 // Render sits behind a proxy; needed for correct client IPs (rate limits).
@@ -44,7 +45,9 @@ app.disable("x-powered-by");
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(compression());
-app.use(morgan(process.env.NODE_ENV === "production" ? "tiny" : "dev"));
+app.use(requestLog);
+// Stripe signs the raw body, so the webhook must be parsed before express.json.
+app.post("/api/stripe/webhook", express.raw({ type: "application/json", limit: "1mb" }), webhook);
 app.use(express.json({ limit: "2mb" }));
 
 // Only the storefront (and local development) may call the API from a browser.
@@ -75,19 +78,17 @@ app.disable('etag');
 
 readdirSync("./routes/").map((r) => app.use("/api", require("./routes/" + r)));
 
-
 // Unknown API routes and unhandled errors return JSON instead of hanging.
 app.use("/api", (req, res) => res.status(404).json({ err: "Not found" }));
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error(`${req.method} ${req.originalUrl} failed:`, err && err.message);
+  log("error", { id: req.id, m: req.method, p: req.originalUrl.split("?")[0], err: err && err.message, stack: err && err.stack && err.stack.split("\n").slice(1, 4).join(" | ") });
   if (res.headersSent) return;
   const status = err.name === "CastError" ? 400 : err.status || 500;
-  res.status(status).json({ err: status === 400 ? "Invalid request" : "Something went wrong" });
+  res.status(status).json({ err: status === 400 ? "Invalid request" : "Something went wrong", id: req.id });
 });
 
 // port
 const port = process.env.PORT || 8000;
 
-
-app.listen(port, () => console.log(`Server is running on port ${port}`));
+app.listen(port, () => log("info", { event: "listening", port }));

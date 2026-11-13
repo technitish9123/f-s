@@ -1,44 +1,66 @@
-const Product = require("../models/product");
 const User = require("../models/user");
-const Cart = require("../models/cart");
-const Coupon = require("../models/coupon");
 const { getStripe, toPaise } = require("../lib/stripe");
+const { loadCart, stockProblems, paymentMatches, placeOrder } = require("../lib/orders");
+const { id } = require("../lib/validate");
+const { log } = require("../lib/log");
 
 exports.createPaymentsInteg = async (req, res) => {
-  const { couponApplied } = req.body;
+  const { couponApplied, shippingAdd } = req.body;
 
-  //cart total
-  let user = await User.findOne({ email: req.user.email }).exec();
+  const user = await User.findOne({ email: req.user.email }).select("_id").lean();
+  const cart = user && (await loadCart({ orderedBy: user._id }));
+  if (!cart || !cart.products.length) return res.status(400).json({ err: "Your bag is empty." });
 
-  const cart = await Cart.findOne({ orderedBy: user._id }).lean().exec();
-  if (!cart || !cart.products || !cart.products.length) {
-    return res.status(400).json({ err: "Your bag is empty." });
-  }
+  const problems = stockProblems(cart);
+  if (problems.length) return res.status(409).json({ err: problems.join(" ") });
+
   const { cartTotal, totalAfterDiscount } = cart;
-
-  let finalAmount = 0;
-
   // Stripe needs whole paise; discounted totals can have fractions.
-  if (couponApplied && totalAfterDiscount) {
-    finalAmount = toPaise(totalAfterDiscount);
-  } else {
-    finalAmount = toPaise(cartTotal);
-  }
-  let userAdd = user.address;
-  //discount total whether coupon applied
+  const payable = toPaise(couponApplied && totalAfterDiscount ? totalAfterDiscount : cartTotal);
 
-  //payments intent by applying order amount and currency
-  let createPaymentIntent = await getStripe().paymentIntents.create({
-    amount: finalAmount,
+  const payment = await getStripe().paymentIntents.create({
+    amount: payable,
     currency: "inr",
-    // Lets createOrder confirm this payment belongs to this customer.
-    metadata: { userId: String(user._id), cartId: String(cart._id) },
+    // Ties the payment to this customer and cart; the webhook also needs the
+    // shipping address in case the browser never reports back.
+    metadata: {
+      userId: String(user._id),
+      cartId: String(cart._id),
+      ...(shippingAdd && { shipping: JSON.stringify(shippingAdd).slice(0, 500) }),
+    },
   });
 
-  res.send({
-    clientSecret: createPaymentIntent.client_secret,
-    cartTotal,
-    totalAfterDiscount,
-    payable: finalAmount,
-  });
+  res.send({ clientSecret: payment.client_secret, cartTotal, totalAfterDiscount, payable });
+};
+
+// Stripe -> us. Records the order even if the customer closed the tab right
+// after paying. Signed by Stripe; needs STRIPE_WEBHOOK_SECRET.
+exports.webhook = async (req, res) => {
+  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!secret) return res.status(503).json({ err: "Webhook not configured." });
+
+  let event;
+  try {
+    event = getStripe().webhooks.constructEvent(req.body, req.headers["stripe-signature"], secret);
+  } catch (err) {
+    return res.status(400).json({ err: "Invalid signature." });
+  }
+
+  if (event.type === "payment_intent.succeeded") {
+    const payment = event.data.object;
+    const { userId, cartId, shipping } = payment.metadata || {};
+    const ok = id(userId) && id(cartId);
+    const [user, cart] = ok ? await Promise.all([
+      User.findById(userId).select("_id email"),
+      loadCart({ _id: cartId, orderedBy: userId }),
+    ]) : [];
+    // No cart means the browser already placed the order (it empties the cart).
+    if (user && cart && cart.products.length && paymentMatches(payment, user, cart)) {
+      let shippingAdd;
+      try { shippingAdd = shipping ? JSON.parse(shipping) : undefined; } catch { /* truncated: leave empty */ }
+      const created = await placeOrder({ user, cart, payment, shippingAdd });
+      if (created) log("info", { event: "order_from_webhook", payment: payment.id });
+    }
+  }
+  res.json({ received: true });
 };

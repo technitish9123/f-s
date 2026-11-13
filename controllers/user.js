@@ -3,8 +3,8 @@ const User = require("../models/user");
 const Cart = require("../models/cart");
 const Coupon = require("../models/coupon");
 const Order = require("../models/order");
-const { getStripe, toPaise } = require("../lib/stripe");
-const { sendOrderConfirmation } = require("../lib/mailer");
+const { getStripe } = require("../lib/stripe");
+const { loadCart, paymentMatches, placeOrder } = require("../lib/orders");
 
 // The signed-in customer's database record (null if they have none yet).
 const currentUser = (req, select) => {
@@ -78,84 +78,28 @@ exports.applyCouponDiscount = async (req, res) => {
 };
 
 exports.createOrder = async (req, res) => {
-  const { paymentIntent } = req.body; // { shippingAdd, paymentInfo: { id, ... } }
+  const { paymentIntent } = req.body; // { shippingAdd, paymentInfo: { id } }
+  const paymentId = paymentIntent?.paymentInfo?.id;
+  if (typeof paymentId !== "string") return res.status(400).json({ err: "Payment details are missing." });
+
+  // Idempotent: the Stripe webhook (or a retry) may have recorded it already.
+  if (await Order.exists({ "paymentIntent.paymentInfo.id": paymentId })) return res.json({ ok: true });
 
   const user = await currentUser(req);
   if (!user) return res.status(404).json({ err: "User not found." });
+  const cart = await loadCart({ orderedBy: user._id });
+  if (!cart || !cart.products.length) return res.status(400).json({ err: "Your bag is empty." });
 
-  const cart = await Cart.findOne({ orderedBy: user._id })
-    .populate("products.product", "_id title price")
-    .exec();
-  if (!cart || !cart.products.length) {
-    return res.status(400).json({ err: "Your bag is empty." });
-  }
-
-  // ---- Verify the payment with Stripe; never trust the browser's word -----
-  const paymentId = paymentIntent && paymentIntent.paymentInfo && paymentIntent.paymentInfo.id;
-  if (!paymentId) return res.status(400).json({ err: "Payment details are missing." });
-
-  // Idempotent: a retried request for an already-recorded payment succeeds.
-  const existing = await Order.findOne({ "paymentIntent.paymentInfo.id": paymentId }).lean().exec();
-  if (existing) return res.json({ ok: true });
-
-  let stripePayment;
+  // Verify the payment with Stripe; never trust the browser's word.
+  let payment;
   try {
-    stripePayment = await getStripe().paymentIntents.retrieve(paymentId);
+    payment = await getStripe().paymentIntents.retrieve(paymentId);
   } catch (err) {
     return res.status(400).json({ err: "Payment could not be verified." });
   }
+  if (!paymentMatches(payment, user, cart)) return res.status(400).json({ err: "Payment could not be verified." });
 
-  const allowed = [toPaise(cart.cartTotal), toPaise(cart.totalAfterDiscount)].filter((a) => a > 0);
-  // Fail closed: the payment must have been created by createPaymentsInteg
-  // for this user and this exact cart.
-  const meta = stripePayment.metadata || {};
-  const ownerOk = meta.userId === String(user._id) && meta.cartId === String(cart._id);
-  if (
-    stripePayment.status !== "succeeded" ||
-    stripePayment.currency !== "inr" ||
-    !allowed.includes(stripePayment.amount) ||
-    !ownerOk
-  ) {
-    return res.status(400).json({ err: "Payment could not be verified." });
-  }
-
-  // Store Stripe's own record (same shape the invoice and account pages read).
-  // The unique index on the payment id makes a concurrent replay fail here.
-  let newOrder;
-  try {
-    newOrder = await new Order({
-    products: cart.products.map((p) => ({ product: p.product && p.product._id, count: p.count, color: p.color })),
-    paymentIntent: {
-      shippingAdd: paymentIntent.shippingAdd,
-      paymentInfo: { id: stripePayment.id, status: stripePayment.status, stripeResponse: stripePayment },
-    },
-    orderedBy: user._id,
-    userEmail: user.email,
-    }).save();
-  } catch (err) {
-    if (err && err.code === 11000) return res.json({ ok: true }); // already recorded
-    throw err;
-  }
-
-  // Track sales; adjust stock only for products that track it.
-  const ops = cart.products
-    .filter((p) => p.product)
-    .flatMap((p) => [
-      { updateOne: { filter: { _id: p.product._id }, update: { $inc: { sold: p.count } } } },
-      {
-        updateOne: {
-          filter: { _id: p.product._id, quantity: { $type: "number", $gt: 0 } },
-          update: { $inc: { quantity: -p.count } },
-        },
-      },
-    ]);
-  if (ops.length) await Product.bulkWrite(ops, { ordered: false });
-
-  sendOrderConfirmation(
-    newOrder,
-    cart.products.filter((p) => p.product).map((p) => ({ title: p.product.title, price: p.product.price, count: p.count }))
-  );
-
+  await placeOrder({ user, cart, payment, shippingAdd: paymentIntent.shippingAdd });
   res.json({ ok: true });
 };
 
