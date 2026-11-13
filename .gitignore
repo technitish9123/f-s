@@ -104,3 +104,7 @@ dist
 
 # TernJS port file
 .tern-port
+
+# Firebase service-account key (secret)
+config/fbServiceAccountKey.json
+*firebase-adminsdk*.json
