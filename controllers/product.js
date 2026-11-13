@@ -8,7 +8,6 @@ exports.create = async (req, res) => {
     req.body.slug = slugify(req.body.title);
     res.json(await new Product(req.body).save());
   } catch (err) {
-    console.log(err);
     res.status(400).json({
       err: err.message,
     });
@@ -16,10 +15,12 @@ exports.create = async (req, res) => {
 };
 
 exports.listAll = async (req, res) => {
+  const count = Math.min(Math.max(parseInt(req.params.count, 10) || 0, 0), 2000);
   let products = await Product.find({})
-    .limit(parseInt(req.params.count))
+    .limit(count)
     .populate("category")
     .populate("subs")
+      .lean()
     .sort([["createdAt", "desc"]])
     .exec();
 
@@ -42,6 +43,7 @@ exports.read = async (req, res) => {
   const productDetail = await Product.findOne({ slug: req.params.slug })
     .populate("category")
     .populate("subs")
+      .lean()
     .exec();
 
   res.json(productDetail);
@@ -56,7 +58,6 @@ exports.update = async (req, res) => {
     ).exec();
     res.json(updatedValue);
   } catch (err) {
-    console.log(err);
     res.status(400).send("product update failed");
   }
 };
@@ -86,21 +87,21 @@ exports.list = async (req, res) => {
   try {
     //sort: createdAt/UpdatedAt order: ascending/descending page: current age selected
     const { sort, order, page } = req.body;
-    currentPage = page || 1;
+    const currentPage = page || 1;
     //on one page how many to show
-    perPage = 3;
+    const perPage = 3;
 
     let products = await Product.find({})
       .skip((currentPage - 1) * perPage)
       .populate("category")
       .populate("subs")
+      .lean()
       .limit(parseInt(perPage))
       .sort([[sort, order]])
       .exec();
 
     res.json(products);
   } catch (err) {
-    console.log(err);
   }
 };
 
@@ -112,7 +113,8 @@ exports.productsCount = async (req, res) => {
 exports.productStar = async (req, res) => {
   let product = await Product.findById(req.params.product_id).exec();
   let user = await User.findOne({ email: req.user.email }).exec();
-  let { star } = req.body;
+  const star = Math.round(Number(req.body.star));
+  if (!(star >= 1 && star <= 5)) return res.status(400).json({ err: "Rating must be 1-5." });
 
   //who is rating?
   //to find out whether the current user has left any rating previousy or not
@@ -126,7 +128,7 @@ exports.productStar = async (req, res) => {
   if (existingRatingObject === undefined) {
     //finding the product by id and adding to the ratings array by
     //$push method ($push: arrayName : elements to add)
-    ratingAdded = await Product.findByIdAndUpdate(
+    const ratingAdded = await Product.findByIdAndUpdate(
       product._id,
       {
         $push: { ratings: { star, postedBy: user._id } },
@@ -162,6 +164,7 @@ exports.listRelated = async (req, res) => {
     .limit(3)
     .populate("category")
     .populate("subs")
+      .lean()
     .populate("postedBy")
     .exec();
 
@@ -191,7 +194,6 @@ const handlePrice = async (req, res, price) => {
 
     res.json(products);
   } catch (err) {
-    console.log(err);
   }
 };
 
@@ -229,7 +231,6 @@ const handleStars = async (req, res, stars) => {
 
     res.json(products);
   } catch (err) {
-    console.log(err);
   }
 };
 
@@ -278,7 +279,6 @@ exports.searchFilters = async (req, res) => {
   }
 
   if (price !== undefined) {
-    console.log(price);
     await handlePrice(req, res, price);
   }
 
@@ -287,27 +287,22 @@ exports.searchFilters = async (req, res) => {
   }
 
   if (stars) {
-    console.log(stars);
     await handleStars(req, res, stars);
   }
 
   if (sub) {
-    console.log(sub);
     await handleSubs(req, res, sub);
   }
 
   if (shipping) {
-    console.log(shipping);
     await handleShipping(req, res, shipping);
   }
 
   if (color) {
-    console.log(color);
     await handleColor(req, res, color);
   }
 
   if (brand) {
-    console.log(brand);
     await handleBrand(req, res, brand);
   }
 };

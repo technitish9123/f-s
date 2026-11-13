@@ -2,6 +2,9 @@ const Order = require("../models/order");
 const slugify = require("slugify");
 const SliderImage = require("../models/sliderImage");
 const { toLegacyUpdateResult } = require("../lib/legacyUpdateResult");
+const { sendStatusUpdate } = require("../lib/mailer");
+
+const STATUSES = ["Not Processed", "Processing", "Dispatched", "Delivered", "Cancelled"];
 
 exports.orders = async (req, res) => {
   let allOrders = await Order.find({})
@@ -14,12 +17,13 @@ exports.orders = async (req, res) => {
 
 exports.orderStatus = async (req, res) => {
   const { orderId, orderStatus } = req.body;
+  if (!STATUSES.includes(orderStatus)) return res.status(400).json({ err: "Unknown status." });
 
-  let updated = await Order.findByIdAndUpdate(
-    orderId,
-    { orderStatus },
-    { new: true }
-  ).exec();
+  const before = await Order.findById(orderId).select("orderStatus").lean().exec();
+  const updated = await Order.findByIdAndUpdate(orderId, { orderStatus }, { new: true }).exec();
+
+  // Only email when the status actually changes.
+  if (updated && before && before.orderStatus !== orderStatus) sendStatusUpdate(updated);
 
   res.json(updated);
 };

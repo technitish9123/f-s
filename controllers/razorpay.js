@@ -5,14 +5,24 @@ const Coupon = require("../models/coupon");
 const Razorpay = require("razorpay");
 const uniqueId = require("uniqid");
 
-var instance = new Razorpay({
-    key_id: 'rzp_test_LSBeoAbLfmucLN',
-    key_secret: 'CSTuv6ZNpmu554oRiXPKoyEk',
-  });
+// Keys come from the environment (they used to be hard-coded in this public
+// repo; rotate the old test keys). The route answers 503 when unset.
+let instance;
+const getRazorpay = () => {
+  if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) return null;
+  if (!instance) {
+    instance = new Razorpay({
+      key_id: process.env.RAZORPAY_KEY_ID,
+      key_secret: process.env.RAZORPAY_KEY_SECRET,
+    });
+  }
+  return instance;
+};
 
 exports.createPaymentsIntegs = async (req, res) => {
+    const razorpay = getRazorpay();
+    if (!razorpay) return res.status(503).json({ err: "Razorpay is not configured." });
     const { couponApplied } = req.body;
-    console.log(couponApplied);
   
     //cart total
     let user = await User.findOne({ email: req.user.email }).exec();
@@ -35,7 +45,7 @@ exports.createPaymentsIntegs = async (req, res) => {
   
     //payments intent by applying order amount and currency
   
-    await instance.orders.create({
+    await razorpay.orders.create({
       amount: finalAmount,
       currency: "INR",
       receipt:uniqueId()

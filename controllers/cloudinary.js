@@ -38,7 +38,6 @@ exports.sliderUpload = async (req, res) => {
     public_id: result.public_id,
     url: result.secure_url,
   });
-  console.log(result.secure_url)
 };
 
 exports.sliderRemove = (req, res) => {

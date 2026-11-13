@@ -65,4 +65,7 @@ const orderSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+orderSchema.index({ orderedBy: 1, createdAt: -1 });
+orderSchema.index({ "paymentIntent.paymentInfo.id": 1 }, { sparse: true });
+
 module.exports = mongoose.model("Order", orderSchema);

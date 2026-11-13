@@ -13,7 +13,7 @@ router.get("/admin/orders", authCheck, adminCheck, orders);
 
 router.put("/admin/order-status", authCheck, adminCheck, orderStatus);
 
-router.put("/admin/uploadSliderImage", uploadSliderImage);
+router.put("/admin/uploadSliderImage", authCheck, adminCheck, uploadSliderImage);
 
 
 module.exports = router;
