@@ -33,6 +33,8 @@ const orderSchema = new mongoose.Schema(
     userEmail: {
       type: String,
     },
+    // GST invoice number, consecutive per financial year (lib/invoiceNo.js).
+    invoiceNo: { type: String },
   },
   { timestamps: true }
 );
@@ -40,5 +42,6 @@ const orderSchema = new mongoose.Schema(
 orderSchema.index({ orderedBy: 1, createdAt: -1 });
 // One order per Stripe payment, enforced by the database (no double-spend race).
 orderSchema.index({ "paymentIntent.paymentInfo.id": 1 }, { unique: true, sparse: true });
+orderSchema.index({ invoiceNo: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model("Order", orderSchema);
