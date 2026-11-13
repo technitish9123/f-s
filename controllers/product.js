@@ -1,6 +1,7 @@
 const Product = require("../models/product");
 const slugify = require("slugify");
 const User = require("../models/user");
+const { toLegacyUpdateResult } = require("../lib/legacyUpdateResult");
 
 exports.create = async (req, res) => {
   try {
@@ -27,7 +28,10 @@ exports.listAll = async (req, res) => {
 
 exports.deleteProduct = async (req, res) => {
   try {
-    const deleted = Product.findOneAndRemove({ slug: req.params.slug }).exec();
+    // findOneAndRemove was removed in Mongoose 8; findOneAndDelete is the
+    // equivalent. Intentionally not awaited, as before, so the response body
+    // is unchanged.
+    const deleted = Product.findOneAndDelete({ slug: req.params.slug }).exec();
     res.json(deleted);
   } catch (err) {
     return res.send(400).send(err);
@@ -132,7 +136,7 @@ exports.productStar = async (req, res) => {
     res.json(ratingAdded);
   } else {
     //if user already left the rating and want to update the rating
-    let ratingUpdated = await Product.updateOne(
+    let ratingUpdated = toLegacyUpdateResult(await Product.updateOne(
       {
         //using elemMatch to find a particular element inside an array
         ratings: { $elemMatch: existingRatingObject },
@@ -143,7 +147,7 @@ exports.productStar = async (req, res) => {
         $set: { "ratings.$.star": star },
       },
       { new: true }
-    ).exec();
+    ).exec());
     res.json(ratingUpdated);
   }
 };

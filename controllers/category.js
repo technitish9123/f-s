@@ -51,9 +51,13 @@ exports.remove = async (req, res) => {
   }
 };
 
-exports.getSubs = (req, res) => {
-  Sub.find({ parent: req.params._id }).exec((err, subs) => {
-    if (err) res.send(err);
+exports.getSubs = async (req, res) => {
+  // Mongoose 7+ no longer accepts callbacks; same responses as before
+  // (the error object is sent as-is with status 200 on failure).
+  try {
+    const subs = await Sub.find({ parent: req.params._id }).exec();
     res.json(subs);
-  });
+  } catch (err) {
+    res.send(err);
+  }
 };

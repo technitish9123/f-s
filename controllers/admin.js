@@ -1,6 +1,7 @@
 const Order = require("../models/order");
 const slugify = require("slugify");
 const SliderImage = require("../models/sliderImage");
+const { toLegacyUpdateResult } = require("../lib/legacyUpdateResult");
 
 exports.orders = async (req, res) => {
   let allOrders = await Order.find({})
@@ -52,10 +53,8 @@ exports.orderStatus = async (req, res) => {
 exports.uploadSliderImage = async (req, res) => {
   const { name } = req.body;
   try {
-    const updated = await SliderImage.updateOne(
-      
-      { name },
-      { new: true }
+    const updated = toLegacyUpdateResult(
+      await SliderImage.updateOne({ name }, { new: true })
     );
     res.json(updated);
   } catch (err) {
